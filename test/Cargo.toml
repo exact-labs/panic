@@ -1,0 +1,10 @@
+[package]
+name = "test"
+version = "0.0.1"
+edition = "2018"
+
+[package.metadata.release]
+release = false
+
+[dependencies]
+panic = { package = "exact-panic", path = "../", version = "0.0.7" }

@@ -1,9 +1,3 @@
-[workspace]
-members = [
-  "tests/single-panic",
-  "tests/custom-panic",
-]
-
 [package]
 name = "exact-panic"
 version = "0.0.7"
