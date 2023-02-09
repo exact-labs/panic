@@ -8,6 +8,7 @@ use std::io::Result as IoResult;
 use std::panic::PanicInfo;
 use std::path::{Path, PathBuf};
 
+struct Write;
 pub struct Metadata {
     pub name: &'static str,
     pub short_name: &'static str,
@@ -82,9 +83,15 @@ pub fn print_msg<P: AsRef<Path>>(file_path: Option<P>, meta: &Metadata) -> IoRes
     let mut buffer = stderr.buffer();
 
     buffer.set_color(ColorSpec::new().set_fg(Some(Color::Red)))?;
-    write_msg(&mut buffer, file_path, meta)?;
-    buffer.reset()?;
+    Write::head(&mut buffer, meta)?;
 
+    buffer.set_color(ColorSpec::new().set_fg(Some(Color::White)))?;
+    Write::body(&mut buffer, &file_path, meta)?;
+
+    buffer.set_color(ColorSpec::new().set_fg(Some(Color::Green)))?;
+    Write::footer(&mut buffer)?;
+
+    buffer.reset()?;
     stderr.print(&buffer).unwrap();
     Ok(())
 }
@@ -93,39 +100,52 @@ pub fn print_msg<P: AsRef<Path>>(file_path: Option<P>, meta: &Metadata) -> IoRes
 pub fn print_msg<P: AsRef<Path>>(file_path: Option<P>, meta: &Metadata) -> IoResult<()> {
     let mut buffer = std::io::stderr();
 
-    write_msg(&mut buffer, file_path, meta)?;
+    Write::head(&mut buffer, meta)?;
+    Write::body(&mut buffer, &file_path, meta)?;
+    Write::footer(&mut buffer)?;
+
     Ok(())
 }
 
-fn write_msg<P: AsRef<Path>>(buffer: &mut impl std::io::Write, file_path: Option<P>, meta: &Metadata) -> IoResult<()> {
-    let (name, short_name, version, repository) = (&meta.name, &meta.short_name, &meta.version, &meta.repository);
+impl Write {
+    fn head(buffer: &mut impl std::io::Write, meta: &Metadata) -> IoResult<()> {
+        let (name, version) = (&meta.name, &meta.version);
+        writeln!(buffer, "Well, this is embarrassing.")?;
+        writeln!(
+            buffer,
+            "{name} v{version} had a problem and crashed. To help us diagnose the \
+        problem you can send us a crash report.\n"
+        )?;
 
-    writeln!(buffer, "Well, this is embarrassing.")?;
-    writeln!(
-        buffer,
-        "{name} v{version} had a problem and crashed. To help us diagnose the \
-     problem you can send us a crash report.\n"
-    )?;
+        Ok(())
+    }
 
-    writeln!(
-        buffer,
-        "We have generated a report file at \"{}\". Submit an \
-      issue or email with the subject of \"{short_name} v{version} crash report\" and include the \
-      report as an attachment at {repository}/issues.",
-        match file_path {
-            Some(fp) => format!("{}", fp.as_ref().display()),
-            None => "<Failed to store file to disk>".to_string(),
-        },
-    )?;
+    fn body<P: AsRef<Path>>(buffer: &mut impl std::io::Write, file_path: &Option<P>, meta: &Metadata) -> IoResult<()> {
+        let (short_name, version, repository) = (&meta.short_name, &meta.version, &meta.repository);
+        writeln!(
+            buffer,
+            "We have generated a report file at \"{}\". Submit an \
+          issue or email with the subject of \"{short_name} v{version} crash report\" and include the \
+          report as an attachment at {repository}/issues.",
+            match file_path {
+                Some(fp) => format!("{}", fp.as_ref().display()),
+                None => "<Failed to store file to disk>".to_string(),
+            },
+        )?;
 
-    writeln!(
-        buffer,
-        "\nWe take privacy seriously, and do not perform any \
-      automated error collection. In order to improve the software, we rely on \
-      people to submit reports.\nThank you!"
-    )?;
+        Ok(())
+    }
 
-    Ok(())
+    fn footer(buffer: &mut impl std::io::Write) -> IoResult<()> {
+        writeln!(
+            buffer,
+            "\nWe take privacy seriously, and do not perform any \
+          automated error collection. In order to improve the software, we rely on \
+          people to submit reports.\nThank you!"
+        )?;
+
+        Ok(())
+    }
 }
 
 pub fn handle_dump(meta: &Metadata, panic_info: &PanicInfo) -> Option<PathBuf> {
@@ -151,7 +171,7 @@ pub fn handle_dump(meta: &Metadata, panic_info: &PanicInfo) -> Option<PathBuf> {
         None => expl.push_str("Panic location unknown.\n"),
     }
 
-    let report = Report::new(&meta.name, &meta.version, Method::Panic, expl, cause);
+    let report = Report::new(&meta.short_name, &meta.version, Method::Panic, expl, cause);
 
     match report.persist() {
         Ok(f) => Some(f),
