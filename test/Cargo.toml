@@ -7,4 +7,4 @@ edition = "2018"
 release = false
 
 [dependencies]
-panic = { package = "exact-panic", path = "../", version = "0.0.7" }
+exact-panic = { path = "../", version = "0.0.7", features = ["color"] }

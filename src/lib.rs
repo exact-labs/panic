@@ -4,26 +4,25 @@
 pub mod report;
 use report::{Method, Report};
 
-use std::borrow::Cow;
 use std::io::Result as IoResult;
 use std::panic::PanicInfo;
 use std::path::{Path, PathBuf};
 
 pub struct Metadata {
-    pub version: Cow<'static, str>,
-    pub name: Cow<'static, str>,
-    pub authors: Cow<'static, str>,
-    pub homepage: Cow<'static, str>,
+    pub name: &'static str,
+    pub short_name: &'static str,
+    pub version: &'static str,
+    pub repository: &'static str,
 }
 
 #[macro_export]
 macro_rules! metadata {
     () => {
         Metadata {
-            version: env!("CARGO_PKG_VERSION").into(),
             name: env!("CARGO_PKG_NAME").into(),
-            authors: env!("CARGO_PKG_AUTHORS").replace(":", ", ").into(),
-            homepage: env!("CARGO_PKG_HOMEPAGE").into(),
+            short_name: env!("CARGO_PKG_NAME").into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            repository: env!("CARGO_PKG_HOMEPAGE").into(),
         }
     };
 }
@@ -99,39 +98,32 @@ pub fn print_msg<P: AsRef<Path>>(file_path: Option<P>, meta: &Metadata) -> IoRes
 }
 
 fn write_msg<P: AsRef<Path>>(buffer: &mut impl std::io::Write, file_path: Option<P>, meta: &Metadata) -> IoResult<()> {
-    let (_version, name, authors, homepage) = (&meta.version, &meta.name, &meta.authors, &meta.homepage);
+    let (name, short_name, version, repository) = (&meta.name, &meta.short_name, &meta.version, &meta.repository);
 
-    writeln!(buffer, "Well, this is embarrassing.\n")?;
+    writeln!(buffer, "Well, this is embarrassing.")?;
     writeln!(
         buffer,
-        "{name} had a problem and crashed. To help us diagnose the \
+        "{name} v{version} had a problem and crashed. To help us diagnose the \
      problem you can send us a crash report.\n"
     )?;
+
     writeln!(
         buffer,
         "We have generated a report file at \"{}\". Submit an \
-     issue or email with the subject of \"{} Crash Report\" and include the \
-     report as an attachment.\n",
+      issue or email with the subject of \"{short_name} v{version} crash report\" and include the \
+      report as an attachment at {repository}/issues.",
         match file_path {
             Some(fp) => format!("{}", fp.as_ref().display()),
             None => "<Failed to store file to disk>".to_string(),
         },
-        name
     )?;
 
-    if !homepage.is_empty() {
-        writeln!(buffer, "- Homepage: {homepage}")?;
-    }
-    if !authors.is_empty() {
-        writeln!(buffer, "- Authors: {authors}")?;
-    }
     writeln!(
         buffer,
         "\nWe take privacy seriously, and do not perform any \
-     automated error collection. In order to improve the software, we rely on \
-     people to submit reports.\n"
+      automated error collection. In order to improve the software, we rely on \
+      people to submit reports.\nThank you!"
     )?;
-    writeln!(buffer, "Thank you kindly!")?;
 
     Ok(())
 }

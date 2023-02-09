@@ -1,9 +1,9 @@
 fn main() {
     exact_panic::setup_panic!(Metadata {
-        name: env!("CARGO_PKG_NAME").into(),
-        version: env!("CARGO_PKG_VERSION").into(),
-        authors: "My Company Support <support@mycompany.com".into(),
-        homepage: "support.mycompany.com".into(),
+        name: "The justjs runtime",
+        short_name: "justjs",
+        version: env!("CARGO_PKG_VERSION"),
+        repository: "https://github.com/exact-rs/just"
     });
 
     println!("A normal log message");
