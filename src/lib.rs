@@ -3,7 +3,7 @@
 #![cfg_attr(feature = "nightly", feature(panic_info_message))]
 
 #[cfg(feature = "color")]
-pub use anstyle;
+pub use anstyle::AnsiColor as Color;
 pub mod report;
 
 use report::{Method, Report};
@@ -24,76 +24,84 @@ struct Writer<'w> {
 }
 
 pub struct Metadata {
+    pub messages: Messages,
     pub name: Cow<'static, str>,
     pub short_name: Cow<'static, str>,
     pub version: Cow<'static, str>,
     pub repository: Cow<'static, str>,
-    pub message: Option<Message>,
 }
 
-pub struct Message {
-    pub head: Option<Cow<'static, str>>,
-    pub body: Option<Cow<'static, str>>,
-    pub footer: Option<Cow<'static, str>>,
-}
-
-#[macro_export]
-macro_rules! create_messages {
-    ($($field:ident : $value:expr),*) => {{
-        use $crate::Message;
-        use std::borrow::Cow;
-        let mut message = Message {
-            head: None,
-            body: None,
-            footer: None,
-        };
-        $(
-            let value: Cow<'static, str> = $value.into();
-            message.$field = Some(value).filter(|val| !val.is_empty());
-        )*
-        message
-    }};
+#[derive(Clone)]
+pub struct Messages {
+    pub head: (Option<Cow<'static, str>>, Color),
+    pub body: (Option<Cow<'static, str>>, Color),
+    pub footer: (Option<Cow<'static, str>>, Color),
 }
 
 #[macro_export]
 macro_rules! setup_panic {
-    ($($field:ident : $value:expr),*) => {
+    (@field_arm colors $value:expr, $meta:expr) => {
+        $meta.messages.head.1 = $value.0;
+        $meta.messages.body.1 = $value.1;
+        $meta.messages.footer.1 = $value.2;
+    };
+    (@field_arm $field:ident $value:expr, $meta:expr) => {
+        let value: Cow<'static, str> = $value.into();
+        $meta.messages.$field.0 = Some(value).filter(|val| !val.is_empty());
+    };
+    (
+        $(name: $name:expr,)?
+        $(short_name: $short_name:expr,)?
+        $(version: $version:expr,)?
+        $(repository: $repository:expr,)?
+        $(messages: {
+            $(colors: $colors:expr,)?
+            $(head: $head:expr,)?
+            $(body: $body:expr,)?
+            $(footer: $footer:expr)?
+        })?
+    ) => {
         #[allow(unused_imports)]
-        use $crate::Metadata;
+        use std::{borrow::Cow, panic::{self, PanicInfo}};
+        #[allow(unused_imports)]
+        use $crate::{handle_dump, print_msg, Color, Messages, Metadata};
+
+        let mut msg = Messages {
+            head: (None, Color::Red),
+            body: (None, Color::White),
+            footer: (None, Color::Green),
+        };
+
         let mut meta = Metadata {
-            message: None,
+            messages: msg,
             name: env!("CARGO_PKG_NAME").into(),
             short_name: env!("CARGO_PKG_NAME").into(),
             version: env!("CARGO_PKG_VERSION").into(),
             repository: env!("CARGO_PKG_REPOSITORY").into(),
         };
 
-        $(
-            meta.$field = $value.into();
-        )*
-        $crate::insert_metadata!(meta);
-    };
-}
+        $(meta.name=$name.into();)?
+        $(meta.short_name=$short_name.into();)?
+        $(meta.version=$version.into();)?
+        $(meta.repository=$repository.into();)?
 
-#[doc(hidden)]
-#[macro_export]
-macro_rules! insert_metadata {
-    ($meta:expr) => {{
-        #[allow(unused_imports)]
-        use std::panic::{self, PanicInfo};
-        #[allow(unused_imports)]
-        use $crate::{handle_dump, print_msg};
+        $(
+            $($crate::setup_panic!(@field_arm head $head, meta);)?
+            $($crate::setup_panic!(@field_arm body $body, meta);)?
+            $($crate::setup_panic!(@field_arm footer $footer, meta);)?
+            $($crate::setup_panic!(@field_arm colors $colors, meta);)?
+        )?
+
         match $crate::PanicStyle::default() {
             $crate::PanicStyle::Debug => {}
             $crate::PanicStyle::Human => {
-                let meta = $meta;
                 panic::set_hook(Box::new(move |info: &PanicInfo| {
                     let file_path = handle_dump(&meta, info);
                     print_msg(file_path, &meta).expect("human-panic: printing error message to console failed");
                 }));
             }
         }
-    }};
+    };
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -132,15 +140,15 @@ pub fn print_msg<P: AsRef<Path>>(file_path: Option<P>, meta: &Metadata) -> IoRes
     let mut stderr = stderr.lock();
     let mut writer = Writer::new(&mut stderr, file_path, meta);
 
-    write!(writer.buffer, "{}", anstyle::AnsiColor::Red.render_fg())?;
+    write!(writer.buffer, "{}", meta.messages.head.1.render_fg())?;
     writer.head()?;
     write!(writer.buffer, "{}", anstyle::Reset.render())?;
 
-    write!(writer.buffer, "{}", anstyle::AnsiColor::White.render_fg())?;
+    write!(writer.buffer, "{}", meta.messages.body.1.render_fg())?;
     writer.body()?;
     write!(writer.buffer, "{}", anstyle::Reset.render())?;
 
-    write!(writer.buffer, "{}", anstyle::AnsiColor::Green.render_fg())?;
+    write!(writer.buffer, "{}", meta.messages.footer.1.render_fg())?;
     writer.footer()?;
     write!(writer.buffer, "{}", anstyle::Reset.render())?;
 
@@ -181,7 +189,7 @@ impl<'w> Writer<'w> {
     fn head(&mut self) -> IoResult<()> {
         let (name, version) = (&self.meta.name, &self.meta.version);
 
-        if let Some(head) = self.meta.message.as_ref().and_then(|message| message.head.clone()) {
+        if let Some(head) = &self.meta.messages.head.0 {
             let tmpl = Template::new_with_placeholder(&head, "%(", ")");
             writeln!(self.buffer, "{}", tmpl.fill_with_hashmap(&self.table))?;
         } else {
@@ -199,7 +207,7 @@ impl<'w> Writer<'w> {
     fn body(&mut self) -> IoResult<()> {
         let (short_name, version, repository) = (&self.meta.short_name, &self.meta.version, &self.meta.repository);
 
-        if let Some(body) = self.meta.message.as_ref().and_then(|message| message.body.clone()) {
+        if let Some(body) = &self.meta.messages.body.0 {
             let tmpl = Template::new_with_placeholder(&body, "%(", ")");
             writeln!(self.buffer, "{}", tmpl.fill_with_hashmap(&self.table))?;
         } else {
@@ -216,7 +224,7 @@ impl<'w> Writer<'w> {
     }
 
     fn footer(&mut self) -> IoResult<()> {
-        if let Some(footer) = self.meta.message.as_ref().and_then(|message| message.footer.clone()) {
+        if let Some(footer) = &self.meta.messages.footer.0 {
             let tmpl = Template::new_with_placeholder(&footer, "%(", ")");
             writeln!(self.buffer, "{}", tmpl.fill_with_hashmap(&self.table))?;
         } else {

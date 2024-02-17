@@ -1,6 +1,6 @@
 [package]
 name = "panic"
-version = "0.3.0"
+version = "0.3.1"
 description = "Humanized panic message wrapper"
 license = "MIT"
 edition = "2021"
