@@ -2,49 +2,91 @@
 #![cfg_attr(feature = "nightly", deny(missing_docs))]
 #![cfg_attr(feature = "nightly", feature(panic_info_message))]
 
+#[cfg(feature = "color")]
+pub use anstyle;
 pub mod report;
+
 use report::{Method, Report};
+use text_placeholder::Template;
 
-use std::borrow::Cow;
-use std::io::Result as IoResult;
-use std::panic::PanicInfo;
-use std::path::{Path, PathBuf};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    io::Result as IoResult,
+    panic::PanicInfo,
+    path::{Path, PathBuf},
+};
 
-struct Write;
+struct Writer<'w> {
+    meta: &'w Metadata,
+    table: HashMap<&'w str, &'w str>,
+    pub(crate) buffer: &'w mut dyn std::io::Write,
+}
+
 pub struct Metadata {
     pub name: Cow<'static, str>,
     pub short_name: Cow<'static, str>,
     pub version: Cow<'static, str>,
     pub repository: Cow<'static, str>,
+    pub message: Option<Message>,
+}
+
+pub struct Message {
+    pub head: Option<Cow<'static, str>>,
+    pub body: Option<Cow<'static, str>>,
+    pub footer: Option<Cow<'static, str>>,
 }
 
 #[macro_export]
-macro_rules! setup_from_metadata {
-    () => {
-        $crate::setup_panic!(
-            name: env!("CARGO_PKG_NAME"),
-            short_name: env!("CARGO_PKG_NAME"),
-            version: env!("CARGO_PKG_VERSION"),
-            repository: env!("CARGO_PKG_REPOSITORY")
-        )
-    };
+macro_rules! create_messages {
+    ($($field:ident : $value:expr),*) => {{
+        use $crate::Message;
+        use std::borrow::Cow;
+        let mut message = Message {
+            head: None,
+            body: None,
+            footer: None,
+        };
+        $(
+            let value: Cow<'static, str> = $value.into();
+            message.$field = Some(value).filter(|val| !val.is_empty());
+        )*
+        message
+    }};
 }
 
 #[macro_export]
 macro_rules! setup_panic {
-    ($($field:ident : $value:expr),*) => {{
+    ($($field:ident : $value:expr),*) => {
+        #[allow(unused_imports)]
+        use $crate::Metadata;
+        let mut meta = Metadata {
+            message: None,
+            name: env!("CARGO_PKG_NAME").into(),
+            short_name: env!("CARGO_PKG_NAME").into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            repository: env!("CARGO_PKG_REPOSITORY").into(),
+        };
+
+        $(
+            meta.$field = $value.into();
+        )*
+        $crate::insert_metadata!(meta);
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! insert_metadata {
+    ($meta:expr) => {{
         #[allow(unused_imports)]
         use std::panic::{self, PanicInfo};
         #[allow(unused_imports)]
-        use $crate::{handle_dump, print_msg, Metadata};
-
+        use $crate::{handle_dump, print_msg};
         match $crate::PanicStyle::default() {
             $crate::PanicStyle::Debug => {}
             $crate::PanicStyle::Human => {
-                let meta = Metadata {
-                    $($field: $value.into()),*
-                };
-
+                let meta = $meta;
                 panic::set_hook(Box::new(move |info: &PanicInfo| {
                     let file_path = handle_dump(&meta, info);
                     print_msg(file_path, &meta).expect("human-panic: printing error message to console failed");
@@ -86,22 +128,21 @@ impl Default for PanicStyle {
 
 #[cfg(feature = "color")]
 pub fn print_msg<P: AsRef<Path>>(file_path: Option<P>, meta: &Metadata) -> IoResult<()> {
-    use std::io::Write as _;
-
     let stderr = anstream::stderr();
     let mut stderr = stderr.lock();
+    let mut writer = Writer::new(&mut stderr, file_path, meta);
 
-    write!(stderr, "{}", anstyle::AnsiColor::Red.render_fg())?;
-    Write::head(&mut stderr, meta)?;
-    write!(stderr, "{}", anstyle::Reset.render())?;
+    write!(writer.buffer, "{}", anstyle::AnsiColor::Red.render_fg())?;
+    writer.head()?;
+    write!(writer.buffer, "{}", anstyle::Reset.render())?;
 
-    write!(stderr, "{}", anstyle::AnsiColor::White.render_fg())?;
-    Write::body(&mut stderr, &file_path, meta)?;
-    write!(stderr, "{}", anstyle::Reset.render())?;
+    write!(writer.buffer, "{}", anstyle::AnsiColor::White.render_fg())?;
+    writer.body()?;
+    write!(writer.buffer, "{}", anstyle::Reset.render())?;
 
-    write!(stderr, "{}", anstyle::AnsiColor::Green.render_fg())?;
-    Write::footer(&mut stderr)?;
-    write!(stderr, "{}", anstyle::Reset.render())?;
+    write!(writer.buffer, "{}", anstyle::AnsiColor::Green.render_fg())?;
+    writer.footer()?;
+    write!(writer.buffer, "{}", anstyle::Reset.render())?;
 
     Ok(())
 }
@@ -110,51 +151,82 @@ pub fn print_msg<P: AsRef<Path>>(file_path: Option<P>, meta: &Metadata) -> IoRes
 pub fn print_msg<P: AsRef<Path>>(file_path: Option<P>, meta: &Metadata) -> IoResult<()> {
     let stderr = std::io::stderr();
     let mut stderr = stderr.lock();
+    let mut writer = Writer::new(&mut stderr, file_path, meta);
 
-    Write::head(&mut stderr, meta)?;
-    Write::body(&mut stderr, &file_path, meta)?;
-    Write::footer(&mut stderr)?;
+    writer.head()?;
+    writer.body()?;
+    writer.footer()?;
 
     Ok(())
 }
 
-impl Write {
-    fn head(buffer: &mut impl std::io::Write, meta: &Metadata) -> IoResult<()> {
-        let (name, version) = (&meta.name, &meta.version);
-        writeln!(buffer, "Well, this is embarrassing.")?;
-        writeln!(
-            buffer,
-            "{name} v{version} had a problem and crashed. To help us diagnose the \
-        problem you can send us a crash report.\n"
-        )?;
+impl<'w> Writer<'w> {
+    fn new<P: AsRef<Path>>(buffer: &'w mut impl std::io::Write, file_path: Option<P>, meta: &'w Metadata) -> Self {
+        let mut table = HashMap::new();
+
+        let file_path = match file_path {
+            Some(fp) => format!("{}", fp.as_ref().display()),
+            None => "<Failed to store file to disk>".to_string(),
+        };
+
+        table.insert("name", meta.name.as_ref());
+        table.insert("version", meta.version.as_ref());
+        table.insert("short_name", meta.short_name.as_ref());
+        table.insert("repository", meta.repository.as_ref());
+        table.insert("file_path", Box::leak(Box::new(file_path)));
+
+        Self { buffer, meta, table }
+    }
+
+    fn head(&mut self) -> IoResult<()> {
+        let (name, version) = (&self.meta.name, &self.meta.version);
+
+        if let Some(head) = self.meta.message.as_ref().and_then(|message| message.head.clone()) {
+            let tmpl = Template::new_with_placeholder(&head, "%(", ")");
+            writeln!(self.buffer, "{}", tmpl.fill_with_hashmap(&self.table))?;
+        } else {
+            writeln!(self.buffer, "Well, this is embarrassing.")?;
+            writeln!(
+                self.buffer,
+                "{name} v{version} had a problem and crashed. To help us diagnose the \
+            problem you can send us a crash report.\n"
+            )?;
+        }
 
         Ok(())
     }
 
-    fn body<P: AsRef<Path>>(buffer: &mut impl std::io::Write, file_path: &Option<P>, meta: &Metadata) -> IoResult<()> {
-        let (short_name, version, repository) = (&meta.short_name, &meta.version, &meta.repository);
-        writeln!(
-            buffer,
-            "We have generated a report file at \"{}\". Submit an \
+    fn body(&mut self) -> IoResult<()> {
+        let (short_name, version, repository) = (&self.meta.short_name, &self.meta.version, &self.meta.repository);
+
+        if let Some(body) = self.meta.message.as_ref().and_then(|message| message.body.clone()) {
+            let tmpl = Template::new_with_placeholder(&body, "%(", ")");
+            writeln!(self.buffer, "{}", tmpl.fill_with_hashmap(&self.table))?;
+        } else {
+            writeln!(
+                self.buffer,
+                "We have generated a report file at \"{}\". Submit an \
           issue or email with the subject of \"{short_name} v{version} crash report\" and include the \
           report as an attachment at {repository}/issues.",
-            match file_path {
-                Some(fp) => format!("{}", fp.as_ref().display()),
-                None => "<Failed to store file to disk>".to_string(),
-            },
-        )?;
+                self.table.get("file_path").unwrap(),
+            )?;
+        }
 
         Ok(())
     }
 
-    fn footer(buffer: &mut impl std::io::Write) -> IoResult<()> {
-        writeln!(
-            buffer,
-            "\nWe take privacy seriously, and do not perform any \
+    fn footer(&mut self) -> IoResult<()> {
+        if let Some(footer) = self.meta.message.as_ref().and_then(|message| message.footer.clone()) {
+            let tmpl = Template::new_with_placeholder(&footer, "%(", ")");
+            writeln!(self.buffer, "{}", tmpl.fill_with_hashmap(&self.table))?;
+        } else {
+            writeln!(
+                self.buffer,
+                "\nWe take privacy seriously, and do not perform any \
           automated error collection. In order to improve the software, we rely on \
           people to submit reports.\nThank you!"
-        )?;
-
+            )?;
+        }
         Ok(())
     }
 }

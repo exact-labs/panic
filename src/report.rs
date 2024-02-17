@@ -1,5 +1,5 @@
 use backtrace::Backtrace;
-use serde_derive::Serialize;
+use serde::Serialize;
 use std::error::Error;
 use std::fmt::Write as FmtWrite;
 use std::mem;
