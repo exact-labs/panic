@@ -1,36 +1,38 @@
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![cfg_attr(feature = "nightly", deny(missing_docs))]
 #![cfg_attr(feature = "nightly", feature(panic_info_message))]
 
 pub mod report;
 use report::{Method, Report};
 
+use std::borrow::Cow;
 use std::io::Result as IoResult;
 use std::panic::PanicInfo;
 use std::path::{Path, PathBuf};
 
 struct Write;
 pub struct Metadata {
-    pub name: &'static str,
-    pub short_name: &'static str,
-    pub version: &'static str,
-    pub repository: &'static str,
+    pub name: Cow<'static, str>,
+    pub short_name: Cow<'static, str>,
+    pub version: Cow<'static, str>,
+    pub repository: Cow<'static, str>,
 }
 
 #[macro_export]
-macro_rules! metadata {
+macro_rules! setup_from_metadata {
     () => {
-        Metadata {
-            name: env!("CARGO_PKG_NAME").into(),
-            short_name: env!("CARGO_PKG_NAME").into(),
-            version: env!("CARGO_PKG_VERSION").into(),
-            repository: env!("CARGO_PKG_HOMEPAGE").into(),
-        }
+        $crate::setup_panic!(
+            name: env!("CARGO_PKG_NAME"),
+            short_name: env!("CARGO_PKG_NAME"),
+            version: env!("CARGO_PKG_VERSION"),
+            repository: env!("CARGO_PKG_REPOSITORY")
+        )
     };
 }
 
 #[macro_export]
 macro_rules! setup_panic {
-    ($meta:expr) => {
+    ($($field:ident : $value:expr),*) => {{
         #[allow(unused_imports)]
         use std::panic::{self, PanicInfo};
         #[allow(unused_imports)]
@@ -39,19 +41,17 @@ macro_rules! setup_panic {
         match $crate::PanicStyle::default() {
             $crate::PanicStyle::Debug => {}
             $crate::PanicStyle::Human => {
-                let meta = $meta;
+                let meta = Metadata {
+                    $($field: $value.into()),*
+                };
 
                 panic::set_hook(Box::new(move |info: &PanicInfo| {
                     let file_path = handle_dump(&meta, info);
-                    print_msg(file_path, &meta).expect("panic: printing error message to console failed");
+                    print_msg(file_path, &meta).expect("human-panic: printing error message to console failed");
                 }));
             }
         }
-    };
-
-    () => {
-        $crate::setup_panic!($crate::metadata!());
-    };
+    }};
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -60,6 +60,7 @@ pub enum PanicStyle {
     Human,
 }
 
+#[cfg(feature = "only-release")]
 impl Default for PanicStyle {
     fn default() -> Self {
         if cfg!(debug_assertions) {
@@ -73,36 +74,46 @@ impl Default for PanicStyle {
     }
 }
 
+#[cfg(not(feature = "only-release"))]
+impl Default for PanicStyle {
+    fn default() -> Self {
+        match ::std::env::var("RUST_BACKTRACE") {
+            Ok(_) => PanicStyle::Debug,
+            Err(_) => PanicStyle::Human,
+        }
+    }
+}
+
 #[cfg(feature = "color")]
 pub fn print_msg<P: AsRef<Path>>(file_path: Option<P>, meta: &Metadata) -> IoResult<()> {
-    use termcolor::{BufferWriter, Color, ColorChoice, ColorSpec, WriteColor};
+    use std::io::Write as _;
 
-    let stderr_support = concolor::get(concolor::Stream::Stdout);
-    let choice = if stderr_support.color() { ColorChoice::Always } else { ColorChoice::Never };
-    let stderr = BufferWriter::stderr(choice);
-    let mut buffer = stderr.buffer();
+    let stderr = anstream::stderr();
+    let mut stderr = stderr.lock();
 
-    buffer.set_color(ColorSpec::new().set_fg(Some(Color::Red)))?;
-    Write::head(&mut buffer, meta)?;
+    write!(stderr, "{}", anstyle::AnsiColor::Red.render_fg())?;
+    Write::head(&mut stderr, meta)?;
+    write!(stderr, "{}", anstyle::Reset.render())?;
 
-    buffer.set_color(ColorSpec::new().set_fg(Some(Color::White)))?;
-    Write::body(&mut buffer, &file_path, meta)?;
+    write!(stderr, "{}", anstyle::AnsiColor::White.render_fg())?;
+    Write::body(&mut stderr, &file_path, meta)?;
+    write!(stderr, "{}", anstyle::Reset.render())?;
 
-    buffer.set_color(ColorSpec::new().set_fg(Some(Color::Green)))?;
-    Write::footer(&mut buffer)?;
+    write!(stderr, "{}", anstyle::AnsiColor::Green.render_fg())?;
+    Write::footer(&mut stderr)?;
+    write!(stderr, "{}", anstyle::Reset.render())?;
 
-    buffer.reset()?;
-    stderr.print(&buffer).unwrap();
     Ok(())
 }
 
 #[cfg(not(feature = "color"))]
 pub fn print_msg<P: AsRef<Path>>(file_path: Option<P>, meta: &Metadata) -> IoResult<()> {
-    let mut buffer = std::io::stderr();
+    let stderr = std::io::stderr();
+    let mut stderr = stderr.lock();
 
-    Write::head(&mut buffer, meta)?;
-    Write::body(&mut buffer, &file_path, meta)?;
-    Write::footer(&mut buffer)?;
+    Write::head(&mut stderr, meta)?;
+    Write::body(&mut stderr, &file_path, meta)?;
+    Write::footer(&mut stderr)?;
 
     Ok(())
 }
