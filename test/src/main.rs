@@ -1,10 +1,12 @@
+use panic::setup_panic;
+
 fn main() {
-    exact_panic::setup_panic!(Metadata {
-        name: "The justjs runtime",
-        short_name: "justjs",
+    setup_panic! {
+        name: "Panic Wrapper",
+        short_name: "panic",
         version: env!("CARGO_PKG_VERSION"),
-        repository: "https://github.com/exact-rs/just"
-    });
+        repository: "https://github.com/exact-labs/panic"
+    };
 
     println!("A normal log message");
     panic!("OMG EVERYTHING IS ON FIRE!!!");
