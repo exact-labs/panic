@@ -13,7 +13,7 @@ use std::{
     borrow::Cow,
     collections::HashMap,
     io::Result as IoResult,
-    panic::PanicInfo,
+    panic::PanicHookInfo,
     path::{Path, PathBuf},
 };
 
@@ -62,7 +62,7 @@ macro_rules! setup_panic {
         })?
     ) => {
         #[allow(unused_imports)]
-        use std::{borrow::Cow, panic::{self, PanicInfo}};
+        use std::{borrow::Cow, panic::{self, PanicHookInfo}};
         #[allow(unused_imports)]
         use $crate::{handle_dump, print_msg, Color, Messages, Metadata};
 
@@ -95,7 +95,7 @@ macro_rules! setup_panic {
         match $crate::PanicStyle::default() {
             $crate::PanicStyle::Debug => {}
             $crate::PanicStyle::Human => {
-                panic::set_hook(Box::new(move |info: &PanicInfo| {
+                panic::set_hook(Box::new(move |info: &PanicHookInfo| {
                     let file_path = handle_dump(&meta, info);
                     print_msg(file_path, &meta).expect("human-panic: printing error message to console failed");
                 }));
@@ -239,7 +239,7 @@ impl<'w> Writer<'w> {
     }
 }
 
-pub fn handle_dump(meta: &Metadata, panic_info: &PanicInfo) -> Option<PathBuf> {
+pub fn handle_dump(meta: &Metadata, panic_info: &PanicHookInfo) -> Option<PathBuf> {
     let mut expl = String::new();
 
     #[cfg(feature = "nightly")]
